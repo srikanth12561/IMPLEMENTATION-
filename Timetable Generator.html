@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Timetable Generator</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--tx:#1d1d1b;--mut:#6b6a63;--bd:#dcdad2;--ac:#1d1d1b;--acx:#fff;--ok:#2f8f5b;--bad:#c93c3c;--chip:0.22;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161615;--card:#222220;--tx:#f0efe9;--mut:#a09f96;--bd:#3a3a36;--ac:#f0efe9;--acx:#161615;--ok:#52bd86;--bad:#ef6a6a;--chip:0.35;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#161615;--card:#222220;--tx:#f0efe9;--mut:#a09f96;--bd:#3a3a36;--ac:#f0efe9;--acx:#161615;--ok:#52bd86;--bad:#ef6a6a;--chip:0.35;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+h1{font-size:1.3rem;margin:0 0 2px}h2{font-size:1rem;margin:0 0 8px}
+.sub{color:var(--mut);margin:0 0 14px;font-size:.9rem}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px;margin-bottom:14px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid var(--bd);padding:4px;font-size:.85rem;vertical-align:top}
+th{background:var(--bg);font-weight:600;text-align:left}
+input,select{font:inherit;color:var(--tx);background:var(--card);border:1px solid var(--bd);border-radius:7px;padding:6px;width:100%;min-width:70px}
+button{font:inherit;padding:8px 14px;border-radius:9px;border:1px solid var(--bd);background:var(--card);color:var(--tx);cursor:pointer}
+button.p{background:var(--ac);color:var(--acx);border-color:var(--ac);font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:10px}
+label{font-size:.78rem;color:var(--mut);display:flex;flex-direction:column;gap:3px;flex:1 1 110px}
+.chip{border-radius:6px;padding:3px 5px;margin:2px 0;font-size:.78rem;line-height:1.25}
+.chip small{display:block;color:var(--mut)}
+.stat{display:flex;gap:16px;flex-wrap:wrap;font-size:.88rem;margin-bottom:8px}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+svg{width:100%;max-height:420px;display:block}
+svg text{fill:var(--tx);font-size:11px}
+.slot{min-width:110px}
+</style>
+</head>
+<body>
+<main>
+<h1>Timetable Generator</h1>
+<p class="sub">Courses are vertices; two courses are joined by an edge if they share a teacher or a student group. A proper coloring gives each color its own time slot, so no clashes occur.</p>
+
+<div class="card">
+<h2>Courses</h2>
+<div class="scroll"><table><thead><tr><th>Course</th><th>Teacher</th><th>Groups (comma-separated)</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="row">
+<button id="add">+ Add course</button>
+<label>Days<input type="number" id="days" min="1" max="7" value="5"></label>
+<label>Periods per day<input type="number" id="per" min="1" max="10" value="4"></label>
+<label>Rooms per slot<input type="number" id="rooms" min="1" max="20" value="3"></label>
+<label>Algorithm<select id="alg"><option value="dsatur">DSATUR</option><option value="welsh">Welsh–Powell</option><option value="greedy">Greedy (input order)</option></select></label>
+<button id="go" class="p">Generate</button>
+</div>
+</div>
+
+<div id="out" hidden>
+<div class="card"><div class="stat" id="stats"></div><h2>Conflict graph</h2><div id="graph"></div></div>
+<div class="card"><div class="row" style="margin:0 0 8px"><label style="max-width:240px">View timetable for<select id="view"></select></label></div>
+<div class="scroll" id="grid"></div></div>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let courses=[
+["Math 101","Dr. Rao","A,B"],["Physics 101","Dr. Iyer","A"],["Chemistry 101","Dr. Das","B"],["CS 101","Dr. Khan","A,C"],
+["English 101","Dr. Lee","A,B,C"],["Math 201","Dr. Rao","C"],["Biology 101","Dr. Shah","B,C"],["Statistics","Dr. Iyer","C"],
+["Algorithms","Dr. Khan","B"],["History","Dr. Lee","A"],["Art","Dr. Shah","A,C"],["Ethics","Dr. Das","C"]
+].map(([n,t,g])=>({n,t,g}));
+let res=null;
+
+function renderRows(){
+  $("rows").innerHTML="";
+  courses.forEach((c,i)=>{
+    const tr=document.createElement("tr");
+    ["n","t","g"].forEach(k=>{
+      const td=document.createElement("td"),inp=document.createElement("input");
+      inp.value=c[k];inp.oninput=()=>c[k]=inp.value;td.appendChild(inp);tr.appendChild(td);
+    });
+    const td=document.createElement("td"),b=document.createElement("button");
+    b.textContent="✕";b.onclick=()=>{courses.splice(i,1);renderRows()};td.appendChild(b);tr.appendChild(td);
+    $("rows").appendChild(tr);
+  });
+}
+const groupsOf=c=>c.g.split(",").map(s=>s.trim()).filter(Boolean);
+function clash(a,b){
+  if(a.t.trim()&&a.t.trim().toLowerCase()===b.t.trim().toLowerCase())return true;
+  const gb=groupsOf(b);return groupsOf(a).some(g=>gb.includes(g));
+}
+function color(adj,alg,rooms){
+  const n=adj.length,col=new Array(n).fill(-1),count=[];
+  const deg=adj.map(a=>a.length);
+  const assign=v=>{
+    const used=new Set(adj[v].map(u=>col[u]).filter(x=>x>=0));
+    let c=0;while(used.has(c)||(count[c]||0)>=rooms)c++;
+    col[v]=c;count[c]=(count[c]||0)+1;
+  };
+  if(alg==="dsatur"){
+    for(let k=0;k<n;k++){
+      let best=-1,bs=-1,bd=-1;
+      for(let v=0;v<n;v++){if(col[v]>=0)continue;
+        const s=new Set(adj[v].map(u=>col[u]).filter(x=>x>=0)).size;
+        if(s>bs||(s===bs&&deg[v]>bd)){best=v;bs=s;bd=deg[v]}}
+      assign(best);
+    }
+  }else{
+    const order=[...Array(n).keys()];
+    if(alg==="welsh")order.sort((a,b)=>deg[b]-deg[a]);
+    order.forEach(assign);
+  }
+  return col;
+}
+function generate(){
+  const cs=courses.filter(c=>c.n.trim());
+  if(!cs.length)return;
+  const days=+$("days").value||1,per=+$("per").value||1,rooms=+$("rooms").value||1;
+  const adj=cs.map(()=>[]),edges=[];
+  for(let i=0;i<cs.length;i++)for(let j=i+1;j<cs.length;j++)if(clash(cs[i],cs[j])){adj[i].push(j);adj[j].push(i);edges.push([i,j])}
+  const col=color(adj,$("alg").value,rooms);
+  res={cs,adj,edges,col,days,per,rooms,k:Math.max(...col)+1};
+  show();
+}
+const hue=c=>(c*47)%360;
+function show(){
+  const {cs,edges,col,days,per,k,rooms}=res,slots=days*per;
+  const valid=edges.every(([a,b])=>col[a]!==col[b]);
+  const fits=k<=slots;
+  $("stats").innerHTML=`<span>Courses <b>${cs.length}</b></span><span>Conflicts (edges) <b>${edges.length}</b></span><span>Colors used <b>${k}</b></span><span>Slots available <b>${slots}</b></span>
+  <span class="${valid?'ok':'bad'}">${valid?'✓ No clashes':'✗ Clash found'}</span><span class="${fits?'ok':'bad'}">${fits?'✓ Fits in the week':'✗ Needs '+(k-slots)+' more slot(s)'}</span>`;
+  drawGraph();
+  const opts=["All courses",...new Set(cs.flatMap(groupsOf).map(g=>"Group "+g)),...new Set(cs.map(c=>c.t.trim()).filter(Boolean))];
+  const prev=$("view").value;
+  $("view").innerHTML=opts.map(o=>`<option>${o}</option>`).join("");
+  if(opts.includes(prev))$("view").value=prev;
+  drawGrid();$("out").hidden=false;
+}
+function drawGraph(){
+  const {cs,edges,col}=res,n=cs.length,W=640,H=420,r=Math.min(W,H)/2-50,cx=W/2,cy=H/2;
+  const P=cs.map((_,i)=>[cx+r*Math.cos(2*Math.PI*i/n-Math.PI/2),cy+r*Math.sin(2*Math.PI*i/n-Math.PI/2)]);
+  let s=`<svg viewBox="0 0 ${W} ${H}">`;
+  edges.forEach(([a,b])=>s+=`<line x1="${P[a][0]}" y1="${P[a][1]}" x2="${P[b][0]}" y2="${P[b][1]}" stroke="currentColor" stroke-opacity=".25"/>`);
+  cs.forEach((c,i)=>{
+    const x=P[i][0],y=P[i][1],lx=cx+(r+30)*Math.cos(2*Math.PI*i/n-Math.PI/2),ly=cy+(r+30)*Math.sin(2*Math.PI*i/n-Math.PI/2);
+    s+=`<circle cx="${x}" cy="${y}" r="13" fill="hsl(${hue(col[i])} 65% 55%)"/><text x="${x}" y="${y+4}" text-anchor="middle" style="fill:#fff;font-weight:700">${col[i]+1}</text>`;
+    s+=`<text x="${lx}" y="${ly+4}" text-anchor="middle">${c.n.length>12?c.n.slice(0,11)+"…":c.n}</text>`;
+  });
+  $("graph").innerHTML=s+"</svg>";
+}
+function drawGrid(){
+  const {cs,col,days,per}=res,v=$("view").value;
+  const show=cs.map((c,i)=>i).filter(i=>v==="All courses"||(v.startsWith("Group ")?groupsOf(cs[i]).includes(v.slice(6)):cs[i].t.trim()===v));
+  const dn=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  let h="<table><thead><tr><th></th>";
+  for(let d=0;d<days;d++)h+=`<th>${dn[d]||"Day "+(d+1)}</th>`;
+  h+="</tr></thead><tbody>";
+  for(let p=0;p<per;p++){
+    h+=`<tr><th>Period ${p+1}</th>`;
+    for(let d=0;d<days;d++){
+      const slot=p*days+d;
+      h+=`<td class="slot">`+show.filter(i=>col[i]===slot).map(i=>`<div class="chip" style="background:hsl(${hue(col[i])} 65% 55% / var(--chip))"><b>${esc(cs[i].n)}</b><small>${esc(cs[i].t)} · ${esc(cs[i].g)}</small></div>`).join("")+"</td>";
+    }
+    h+="</tr>";
+  }
+  $("grid").innerHTML=h+"</tbody></table>";
+}
+const esc=s=>s.replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+$("add").onclick=()=>{courses.push({n:"",t:"",g:""});renderRows()};
+$("go").onclick=generate;
+$("view").onchange=drawGrid;
+renderRows();generate();
+</script>
+</body>
+</html>
